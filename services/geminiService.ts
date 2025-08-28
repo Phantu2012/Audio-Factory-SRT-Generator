@@ -1,13 +1,6 @@
 
 import { GoogleGenAI } from "@google/genai";
 
-const API_KEY = process.env.API_KEY;
-if (!API_KEY) {
-  throw new Error("API_KEY environment variable not set");
-}
-
-const ai = new GoogleGenAI({ apiKey: API_KEY });
-
 const fileToGenerativePart = async (file: File) => {
   const base64EncodedDataPromise = new Promise<string>((resolve) => {
     const reader = new FileReader();
@@ -30,7 +23,13 @@ const fileToGenerativePart = async (file: File) => {
   };
 };
 
-export const generateSrtFromAudioAndScript = async (audioFile: File, scriptContent: string): Promise<string> => {
+export const generateSrtFromAudioAndScript = async (audioFile: File, scriptContent: string, apiKey: string): Promise<string> => {
+  if (!apiKey) {
+    throw new Error("Gemini API Key is missing. Please provide your API key to proceed.");
+  }
+  
+  const ai = new GoogleGenAI({ apiKey });
+
   try {
     const audioPart = await fileToGenerativePart(audioFile);
     
@@ -57,7 +56,7 @@ ${scriptContent}
 
     const srtContent = response.text;
     if (!srtContent || !srtContent.includes('-->')) {
-        throw new Error('The API did not return a valid SRT file. The alignment might have failed.');
+        throw new Error('The API did not return a valid SRT file. The alignment might have failed. Check your API key and file inputs.');
     }
     
     return srtContent.trim();
