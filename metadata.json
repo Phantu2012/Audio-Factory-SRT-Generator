@@ -1,0 +1,5 @@
+{
+  "name": "Audio Factory SRT Generator",
+  "description": "An application that transcribes audio files using Gemini and generates downloadable SRT subtitle files, styled with a high-tech factory theme.",
+  "requestFramePermissions": []
+}
