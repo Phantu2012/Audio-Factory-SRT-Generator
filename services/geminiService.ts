@@ -127,49 +127,103 @@ const splitLongSubtitles = (jsonData: SubtitleEntry[], maxChars: number): Subtit
         const totalDuration = endTimeMs - startTimeMs;
         
         if (isNaN(totalDuration) || totalDuration <= 0) {
-            // Cannot determine duration, so don't split. Push the original entry.
             processedEntries.push({ ...entry, index: currentIndex++ });
             continue;
         }
 
-        const words = entry.text.split(' ');
-        const totalLength = entry.text.length;
-        
-        let currentLine = '';
-        let lineStartTime = startTimeMs;
+        const originalText = entry.text;
+        let remainingText = originalText;
+        let lineStartTimeMs = startTimeMs;
 
-        for (let i = 0; i < words.length; i++) {
-            const word = words[i];
-            const potentialLine = currentLine ? `${currentLine} ${word}` : word;
-
-            if (potentialLine.length > maxChars && currentLine.length > 0) {
-                const lineDuration = Math.round((currentLine.length / totalLength) * totalDuration);
-                const lineEndTime = lineStartTime + lineDuration;
-                
+        while (remainingText.length > 0) {
+            if (remainingText.length <= maxChars) {
                 processedEntries.push({
                     index: currentIndex++,
-                    startTime: formatMillisecondsToTime(lineStartTime),
-                    endTime: formatMillisecondsToTime(lineEndTime),
-                    text: currentLine,
+                    startTime: formatMillisecondsToTime(lineStartTimeMs),
+                    endTime: entry.endTime, // Last chunk gets the original end time
+                    text: remainingText.trim(),
                 });
-
-                lineStartTime = lineEndTime;
-                currentLine = word;
-            } else {
-                currentLine = potentialLine;
+                break;
             }
-        }
-        
-        // Add the last line
-        if (currentLine) {
-             processedEntries.push({
+
+            let splitPos = -1;
+            
+            const chunk = remainingText.substring(0, maxChars + 1);
+
+            const puncPos = Math.max(
+                chunk.lastIndexOf('.'),
+                chunk.lastIndexOf('?'),
+                chunk.lastIndexOf('!'),
+                chunk.lastIndexOf(','),
+                chunk.lastIndexOf(';'),
+                chunk.lastIndexOf(':')
+            );
+
+            if (puncPos > 0) {
+                splitPos = puncPos + 1;
+            } else {
+                // No punctuation. Try for a balanced split if the remaining text isn't excessively long.
+                // This targets sentences that would be split into two lines.
+                const midPoint = Math.floor(remainingText.length / 2);
+                if (midPoint < maxChars && (remainingText.length - midPoint) < maxChars) {
+                     // Prefer splitting in the middle. Find last space before midpoint.
+                    const midSplitPos = remainingText.lastIndexOf(' ', midPoint);
+                    if (midSplitPos > 0) {
+                        splitPos = midSplitPos;
+                    } else {
+                        // If no space before middle, find first one after.
+                        const firstSpaceAfterMid = remainingText.indexOf(' ', midPoint);
+                        if (firstSpaceAfterMid > 0) {
+                            splitPos = firstSpaceAfterMid;
+                        }
+                    }
+                }
+
+                // Fallback to original greedy method if balanced split is not applicable or fails.
+                if (splitPos === -1) {
+                    const spacePos = chunk.lastIndexOf(' ');
+                    if (spacePos > 0) {
+                        splitPos = spacePos;
+                    } else {
+                        // If no space (long word), force split at the character limit.
+                        splitPos = maxChars;
+                    }
+                }
+            }
+
+            const lineText = remainingText.substring(0, splitPos).trim();
+            
+            // Prevent creating empty lines from leading whitespace, which can cause infinite loops.
+            if (lineText.length === 0 && splitPos > 0) {
+                remainingText = remainingText.substring(splitPos).trim();
+                continue;
+            }
+
+            const lineDuration = Math.round((lineText.length / originalText.length) * totalDuration);
+            const lineEndTimeMs = lineStartTimeMs + lineDuration;
+            
+            processedEntries.push({
                 index: currentIndex++,
-                startTime: formatMillisecondsToTime(lineStartTime),
-                endTime: entry.endTime, // Last chunk gets the original end time
-                text: currentLine,
+                startTime: formatMillisecondsToTime(lineStartTimeMs),
+                endTime: formatMillisecondsToTime(lineEndTimeMs),
+                text: lineText,
             });
+
+            remainingText = remainingText.substring(splitPos).trim();
+            lineStartTimeMs = lineEndTimeMs;
         }
     }
+
+    // A final pass to ensure no timing overlaps between subtitles.
+    for (let i = 0; i < processedEntries.length - 1; i++) {
+        const currentEndMs = formatTimeToMilliseconds(processedEntries[i].endTime);
+        const nextStartMs = formatTimeToMilliseconds(processedEntries[i + 1].startTime);
+
+        if (currentEndMs >= nextStartMs) {
+            processedEntries[i].endTime = formatMillisecondsToTime(nextStartMs > 0 ? nextStartMs - 1 : 0);
+        }
+    }
+
     return processedEntries;
 };
 
