@@ -30,21 +30,85 @@ type SubtitleEntry = {
 };
 
 const formatTimeToMilliseconds = (time: string): number => {
+    if (typeof time !== 'string') return NaN;
     const parts = time.split(/[:,]/);
+    if (parts.length !== 4) return NaN;
+
     const hours = parseInt(parts[0], 10);
     const minutes = parseInt(parts[1], 10);
     const seconds = parseInt(parts[2], 10);
     const milliseconds = parseInt(parts[3], 10);
+
+    if (isNaN(hours) || isNaN(minutes) || isNaN(seconds) || isNaN(milliseconds)) {
+        return NaN;
+    }
+
     return (hours * 3600 + minutes * 60 + seconds) * 1000 + milliseconds;
 };
 
 const formatMillisecondsToTime = (totalMilliseconds: number): string => {
+    if (isNaN(totalMilliseconds) || totalMilliseconds < 0) {
+        // This should not be reached if repairSubtitles works, but as a fallback.
+        const date = new Date(0);
+        const hours = date.getUTCHours().toString().padStart(2, '0');
+        const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+        const seconds = date.getUTCSeconds().toString().padStart(2, '0');
+        const milliseconds = date.getUTCMilliseconds().toString().padStart(3, '0');
+        return `${hours}:${minutes}:${seconds},${milliseconds}`;
+    }
     const date = new Date(totalMilliseconds);
     const hours = date.getUTCHours().toString().padStart(2, '0');
     const minutes = date.getUTCMinutes().toString().padStart(2, '0');
     const seconds = date.getUTCSeconds().toString().padStart(2, '0');
     const milliseconds = date.getUTCMilliseconds().toString().padStart(3, '0');
     return `${hours}:${minutes}:${seconds},${milliseconds}`;
+};
+
+const repairSubtitles = (jsonData: SubtitleEntry[]): SubtitleEntry[] => {
+    if (!jsonData || !Array.isArray(jsonData) || jsonData.length === 0) return [];
+
+    const repairedData: SubtitleEntry[] = JSON.parse(JSON.stringify(jsonData));
+
+    for (let i = 0; i < repairedData.length; i++) {
+        const entry = repairedData[i];
+        
+        let startTimeMs = formatTimeToMilliseconds(entry.startTime);
+        let endTimeMs = formatTimeToMilliseconds(entry.endTime);
+        
+        // Fix start time
+        if (isNaN(startTimeMs)) {
+            const prevEntry = i > 0 ? repairedData[i - 1] : null;
+            // The previous end time should already be repaired and valid.
+            const prevEndTimeMs = prevEntry ? formatTimeToMilliseconds(prevEntry.endTime) : 0;
+            startTimeMs = isNaN(prevEndTimeMs) ? 0 : prevEndTimeMs + 1; // Add 1ms to prevent overlap
+        }
+
+        // Fix end time if it's invalid or before start time
+        if (isNaN(endTimeMs) || endTimeMs <= startTimeMs) {
+            const nextEntry = i < repairedData.length - 1 ? repairedData[i + 1] : null;
+            let fixed = false;
+            if (nextEntry) {
+                // Use original next entry's start time for anchor, which is still in repairedData at this point
+                const nextStartTimeMs = formatTimeToMilliseconds(nextEntry.startTime);
+                if (!isNaN(nextStartTimeMs) && nextStartTimeMs > startTimeMs) {
+                    endTimeMs = nextStartTimeMs - 1; // End 1ms before next one
+                    fixed = true;
+                }
+            }
+            
+            // If still not fixed, estimate from text length
+            if (!fixed) {
+                const charsPerSecond = 15; 
+                const estimatedDurationMs = (entry.text.length / charsPerSecond) * 1000;
+                endTimeMs = startTimeMs + Math.max(1000, estimatedDurationMs); // Min 1 second duration
+            }
+        }
+        
+        entry.startTime = formatMillisecondsToTime(startTimeMs);
+        entry.endTime = formatMillisecondsToTime(endTimeMs);
+    }
+    
+    return repairedData;
 };
 
 
@@ -58,18 +122,27 @@ const splitLongSubtitles = (jsonData: SubtitleEntry[], maxChars: number): Subtit
             continue;
         }
 
+        const startTimeMs = formatTimeToMilliseconds(entry.startTime);
+        const endTimeMs = formatTimeToMilliseconds(entry.endTime);
+        const totalDuration = endTimeMs - startTimeMs;
+        
+        if (isNaN(totalDuration) || totalDuration <= 0) {
+            // Cannot determine duration, so don't split. Push the original entry.
+            processedEntries.push({ ...entry, index: currentIndex++ });
+            continue;
+        }
+
         const words = entry.text.split(' ');
-        const totalDuration = formatTimeToMilliseconds(entry.endTime) - formatTimeToMilliseconds(entry.startTime);
         const totalLength = entry.text.length;
         
         let currentLine = '';
-        let lineStartTime = formatTimeToMilliseconds(entry.startTime);
+        let lineStartTime = startTimeMs;
 
         for (let i = 0; i < words.length; i++) {
             const word = words[i];
             const potentialLine = currentLine ? `${currentLine} ${word}` : word;
 
-            if (potentialLine.length > maxChars) {
+            if (potentialLine.length > maxChars && currentLine.length > 0) {
                 const lineDuration = Math.round((currentLine.length / totalLength) * totalDuration);
                 const lineEndTime = lineStartTime + lineDuration;
                 
@@ -206,8 +279,11 @@ export const generateSrtFromAudioAndScript = async (
         throw new Error('The API did not return any subtitle data. Check your file inputs.');
     }
     
+    // Repair potentially broken timestamps from the model
+    const repairedJsonData = repairSubtitles(initialJsonData);
+
     // Post-process to enforce character limits
-    const finalJsonData = splitLongSubtitles(initialJsonData, maxCharsPerLine);
+    const finalJsonData = splitLongSubtitles(repairedJsonData, maxCharsPerLine);
     
     return jsonToSrt(finalJsonData);
 
