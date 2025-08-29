@@ -29,6 +29,78 @@ type SubtitleEntry = {
   text: string;
 };
 
+const formatTimeToMilliseconds = (time: string): number => {
+    const parts = time.split(/[:,]/);
+    const hours = parseInt(parts[0], 10);
+    const minutes = parseInt(parts[1], 10);
+    const seconds = parseInt(parts[2], 10);
+    const milliseconds = parseInt(parts[3], 10);
+    return (hours * 3600 + minutes * 60 + seconds) * 1000 + milliseconds;
+};
+
+const formatMillisecondsToTime = (totalMilliseconds: number): string => {
+    const date = new Date(totalMilliseconds);
+    const hours = date.getUTCHours().toString().padStart(2, '0');
+    const minutes = date.getUTCMinutes().toString().padStart(2, '0');
+    const seconds = date.getUTCSeconds().toString().padStart(2, '0');
+    const milliseconds = date.getUTCMilliseconds().toString().padStart(3, '0');
+    return `${hours}:${minutes}:${seconds},${milliseconds}`;
+};
+
+
+const splitLongSubtitles = (jsonData: SubtitleEntry[], maxChars: number): SubtitleEntry[] => {
+    const processedEntries: SubtitleEntry[] = [];
+    let currentIndex = 1;
+
+    for (const entry of jsonData) {
+        if (entry.text.length <= maxChars) {
+            processedEntries.push({ ...entry, index: currentIndex++ });
+            continue;
+        }
+
+        const words = entry.text.split(' ');
+        const totalDuration = formatTimeToMilliseconds(entry.endTime) - formatTimeToMilliseconds(entry.startTime);
+        const totalLength = entry.text.length;
+        
+        let currentLine = '';
+        let lineStartTime = formatTimeToMilliseconds(entry.startTime);
+
+        for (let i = 0; i < words.length; i++) {
+            const word = words[i];
+            const potentialLine = currentLine ? `${currentLine} ${word}` : word;
+
+            if (potentialLine.length > maxChars) {
+                const lineDuration = Math.round((currentLine.length / totalLength) * totalDuration);
+                const lineEndTime = lineStartTime + lineDuration;
+                
+                processedEntries.push({
+                    index: currentIndex++,
+                    startTime: formatMillisecondsToTime(lineStartTime),
+                    endTime: formatMillisecondsToTime(lineEndTime),
+                    text: currentLine,
+                });
+
+                lineStartTime = lineEndTime;
+                currentLine = word;
+            } else {
+                currentLine = potentialLine;
+            }
+        }
+        
+        // Add the last line
+        if (currentLine) {
+             processedEntries.push({
+                index: currentIndex++,
+                startTime: formatMillisecondsToTime(lineStartTime),
+                endTime: entry.endTime, // Last chunk gets the original end time
+                text: currentLine,
+            });
+        }
+    }
+    return processedEntries;
+};
+
+
 const jsonToSrt = (jsonData: SubtitleEntry[]): string => {
   return jsonData
     .map(entry => {
@@ -44,34 +116,27 @@ const jsonToSrt = (jsonData: SubtitleEntry[]): string => {
     .join('\n\n');
 };
 
-
-const getPrompt = (language: 'en' | 'vi', maxCharsPerLine: number, scriptContent: string) => {
+const getPrompt = (language: 'en' | 'vi', scriptContent: string) => {
     const englishInstructions = `
 You are an expert audio-to-text alignment tool. Your task is to generate a JSON array of subtitle objects based on the provided audio and the full text script.
 
 **CRITICAL RULES:**
-
 1.  **OUTPUT MUST BE VALID JSON:** Your entire output must be a single, valid JSON array of objects. Do not include any other text, explanations, or markdown formatting like \`\`\`json.
-2.  **CHARACTER LIMIT - NON-NEGOTIABLE:** The 'text' property for each JSON object MUST NOT exceed ${maxCharsPerLine} characters. This is the most important rule. If a sentence is too long, you MUST split it into multiple JSON objects, each with its own correct timestamp and index.
-3.  **EXACT SCRIPT MATCH:** The combined 'text' from all JSON objects must EXACTLY MATCH the provided script. Do not add, remove, or change any words or punctuation.
-4.  **ACCURATE TIMESTAMPS:** Each object must have an accurate 'startTime' and 'endTime' in "HH:MM:SS,mmm" format.
-5.  **SEQUENTIAL INDEX:** Each object must have a sequential 'index', starting from 1.
-
-**Final Check:** Before you output the result, review every single JSON object you have created to confirm that the 'text' field does not violate the ${maxCharsPerLine} character limit.
+2.  **EXACT SCRIPT MATCH:** The combined 'text' from all JSON objects must EXACTLY MATCH the provided script. Do not add, remove, or change any words or punctuation.
+3.  **ACCURATE TIMESTAMPS:** Each object must have an accurate 'startTime' and 'endTime' in "HH:MM:SS,mmm" format.
+4.  **SEQUENTIAL INDEX:** Each object must have a sequential 'index', starting from 1.
+5.  **NATURAL PHRASING:** Group words into natural, coherent phrases. Do not create subtitles for single words unless necessary.
 `;
 
     const vietnameseInstructions = `
 Bạn là một công cụ chuyên gia về căn chỉnh âm thanh sang văn bản. Nhiệm vụ của bạn là tạo ra một mảng JSON chứa các đối tượng phụ đề dựa trên âm thanh được cung cấp và kịch bản văn bản đầy đủ.
 
 **QUY TẮC TỐI QUAN TRỌNG:**
-
 1.  **ĐẦU RA PHẢI LÀ JSON HỢP LỆ:** Toàn bộ đầu ra của bạn phải là một mảng JSON hợp lệ chứa các đối tượng. Không bao gồm bất kỳ văn bản, giải thích hoặc định dạng markdown nào khác như \`\`\`json.
-2.  **GIỚI HẠN KÝ TỰ - BẮT BUỘC TUÂN THỦ:** Thuộc tính 'text' cho mỗi đối tượng JSON KHÔNG ĐƯỢC vượt quá ${maxCharsPerLine} ký tự. Đây là quy tắc quan trọng nhất. Nếu một câu quá dài, bạn PHẢI chia nó thành nhiều đối tượng JSON, mỗi đối tượng có dấu thời gian và chỉ số chính xác riêng.
-3.  **TRÙNG KHỚP KỊCH BẢN TUYỆT ĐỐI:** Toàn bộ nội dung 'text' từ tất cả các đối tượng JSON cộng lại PHẢI TRÙNG KHỚP CHÍNH XÁC với kịch bản đã cung cấp. Không thêm, bớt hoặc thay đổi bất kỳ từ ngữ hay dấu câu nào.
-4.  **DẤU THỜI GIAN CHÍNH XÁC:** Mỗi đối tượng phải có 'startTime' và 'endTime' chính xác ở định dạng "HH:MM:SS,mmm".
-5.  **CHỈ SỐ TUẦN TỰ:** Mỗi đối tượng phải có một 'index' tuần tự, bắt đầu từ 1.
-
-**Kiểm tra cuối cùng:** Trước khi bạn xuất kết quả, hãy xem lại từng đối tượng JSON bạn đã tạo để xác nhận rằng trường 'text' không vi phạm giới hạn ${maxCharsPerLine} ký tự.
+2.  **TRÙNG KHỚP KỊCH BẢN TUYỆT ĐỐI:** Toàn bộ nội dung 'text' từ tất cả các đối tượng JSON cộng lại PHẢI TRÙNG KHỚP CHÍNH XÁC với kịch bản đã cung cấp. Không thêm, bớt hoặc thay đổi bất kỳ từ ngữ hay dấu câu nào.
+3.  **DẤU THỜI GIAN CHÍNH XÁC:** Mỗi đối tượng phải có 'startTime' và 'endTime' chính xác ở định dạng "HH:MM:SS,mmm".
+4.  **CHỈ SỐ TUẦN TỰ:** Mỗi đối tượng phải có một 'index' tuần tự, bắt đầu từ 1.
+5.  **NGẮT CÂU TỰ NHIÊN:** Nhóm các từ thành các cụm từ tự nhiên, mạch lạc. Không tạo phụ đề cho từng từ riêng lẻ trừ khi cần thiết.
 `;
 
     const instructions = language === 'vi' ? vietnameseInstructions : englishInstructions;
@@ -103,7 +168,7 @@ export const generateSrtFromAudioAndScript = async (
   try {
     const audioPart = await fileToGenerativePart(audioFile);
     
-    const textPart = getPrompt(language, maxCharsPerLine, scriptContent);
+    const textPart = getPrompt(language, scriptContent);
 
     const responseSchema = {
       type: Type.ARRAY,
@@ -128,20 +193,23 @@ export const generateSrtFromAudioAndScript = async (
       }
     });
 
-    let jsonData: SubtitleEntry[];
+    let initialJsonData: SubtitleEntry[];
     try {
         const cleanedText = response.text.trim().replace(/^```json\s*|```\s*$/g, '');
-        jsonData = JSON.parse(cleanedText);
+        initialJsonData = JSON.parse(cleanedText);
     } catch (parseError) {
         console.error("Failed to parse JSON response:", response.text);
         throw new Error('The API returned an invalid JSON format. The alignment might have failed.');
     }
 
-    if (!Array.isArray(jsonData) || jsonData.length === 0) {
+    if (!Array.isArray(initialJsonData) || initialJsonData.length === 0) {
         throw new Error('The API did not return any subtitle data. Check your file inputs.');
     }
     
-    return jsonToSrt(jsonData);
+    // Post-process to enforce character limits
+    const finalJsonData = splitLongSubtitles(initialJsonData, maxCharsPerLine);
+    
+    return jsonToSrt(finalJsonData);
 
   } catch (error) {
     console.error("Error calling Gemini API:", error);

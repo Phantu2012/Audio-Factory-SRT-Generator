@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useEffect, useContext } from 'react';
+import React, { useState, useCallback, useEffect, useContext, useRef } from 'react';
 import { generateSrtFromAudioAndScript } from './services/geminiService';
 import { FileUpload } from './components/FileUpload';
 import { ScriptUpload } from './components/ScriptUpload';
@@ -35,6 +35,8 @@ const App: React.FC = () => {
   const [generationLanguage, setGenerationLanguage] = useState<'en' | 'vi'>('en');
   const [view, setView] = useState<AppView>('generator');
   const [viewingHistoryItem, setViewingHistoryItem] = useState<{ fileName: string; srtContent: string } | null>(null);
+  const [progress, setProgress] = useState(0);
+  const progressIntervalRef = useRef<number | null>(null);
 
 
   useEffect(() => {
@@ -103,6 +105,33 @@ const App: React.FC = () => {
     }
   };
 
+  const stopProgressSimulation = useCallback(() => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+    setProgress(100);
+  }, []);
+
+  const startProgressSimulation = useCallback(() => {
+    setProgress(0);
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+    }
+    progressIntervalRef.current = window.setInterval(() => {
+      setProgress(prev => {
+        if (prev >= 95) {
+          if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+          return 95;
+        }
+        if (prev < 60) {
+          return prev + Math.random() * 5;
+        }
+        return prev + Math.random() * 2;
+      });
+    }, 400);
+  }, []);
+
   const handleGenerateSrt = useCallback(async () => {
     if (!apiKey) {
       setError(t('error.apiKeyMissing'));
@@ -122,30 +151,38 @@ const App: React.FC = () => {
     setStatus('loading');
     setError(null);
     setViewingHistoryItem(null);
+    startProgressSimulation();
     try {
       const result = await generateSrtFromAudioAndScript(audioFile, scriptContent, maxCharsPerLine, apiKey, generationLanguage);
+      stopProgressSimulation();
       setSrtResult(result);
-      setStatus('success');
       addToHistory({
         id: crypto.randomUUID(),
         fileName: audioFile.name,
         srtContent: result,
         timestamp: Date.now(),
       });
+      // A small delay to show 100% completion before switching views
+      setTimeout(() => {
+        setStatus('success');
+      }, 300);
     } catch (err: unknown) {
       console.error('SRT Generation failed:', err);
+      stopProgressSimulation();
       const errorMessage = err instanceof Error ? err.message : t('error.unknown');
       
       if (errorMessage.includes('Invalid API Key')) {
           setError(`${errorMessage}. ${t('error.newKeyPrompt')}`);
-          setStatus('error');
           setTimeout(handleInvalidApiKey, 3000);
       } else {
           setError(`${t('error.productionHalt')} ${errorMessage}`);
-          setStatus('error');
       }
+      // A small delay to show 100% completion before switching views
+      setTimeout(() => {
+         setStatus('error');
+      }, 300);
     }
-  }, [audioFile, textFile, scriptContent, maxCharsPerLine, apiKey, generationLanguage, t, addToHistory, handleInvalidApiKey]);
+  }, [audioFile, textFile, scriptContent, maxCharsPerLine, apiKey, generationLanguage, t, addToHistory, handleInvalidApiKey, startProgressSimulation, stopProgressSimulation]);
 
   const handleDownloadSrt = (fileName: string, srtContent: string) => {
     const blob = new Blob([srtContent], { type: 'text/srt' });
@@ -188,7 +225,7 @@ const App: React.FC = () => {
 
     switch (status) {
       case 'loading':
-        return <Loader />;
+        return <Loader progress={progress} />;
       case 'error':
         const showReset = !error?.includes('Invalid API Key');
         return <ErrorDisplay message={error || t('error.unknown')} onReset={resetState} showReset={showReset} />;
