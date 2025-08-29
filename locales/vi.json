@@ -2,7 +2,8 @@
 {
   "header": {
     "title": "Xưởng Âm Thanh",
-    "subtitle": "Trình tạo phụ đề SRT tự động"
+    "subtitle": "Trình tạo phụ đề SRT tự động",
+    "changeApiKey": "Đổi khóa API"
   },
   "tabs": {
     "generator": "Trình tạo",

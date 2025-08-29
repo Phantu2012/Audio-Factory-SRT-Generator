@@ -59,12 +59,12 @@ const App: React.FC = () => {
     setIsAuthorized(true);
   };
   
-  const handleInvalidApiKey = () => {
+  const handleInvalidApiKey = useCallback(() => {
       localStorage.removeItem('gemini-api-key');
       setApiKey(null);
       setIsAuthorized(false);
       setStatus('idle');
-  };
+  }, []);
 
   const handleAudioFileChange = (file: File | null) => {
     if (file) {
@@ -145,7 +145,7 @@ const App: React.FC = () => {
           setStatus('error');
       }
     }
-  }, [audioFile, textFile, scriptContent, maxCharsPerLine, apiKey, generationLanguage, t, addToHistory]);
+  }, [audioFile, textFile, scriptContent, maxCharsPerLine, apiKey, generationLanguage, t, addToHistory, handleInvalidApiKey]);
 
   const handleDownloadSrt = (fileName: string, srtContent: string) => {
     const blob = new Blob([srtContent], { type: 'text/srt' });
@@ -263,7 +263,7 @@ const App: React.FC = () => {
   return (
     <div className="bg-slate-50 dark:bg-slate-900 min-h-screen text-slate-800 dark:text-slate-200 font-sans flex flex-col items-center p-4 sm:p-6 md:p-8 transition-colors duration-300">
       <div className="w-full max-w-3xl mx-auto">
-        <Header />
+        <Header isAuthorized={isAuthorized} onChangeApiKey={handleInvalidApiKey} />
         <main className="mt-8 bg-white dark:bg-slate-800/50 backdrop-blur-sm border border-slate-200 dark:border-sky-500/20 rounded-2xl shadow-2xl shadow-sky-500/10 overflow-hidden">
             {isAuthorized && (
                <div className="border-b border-slate-200 dark:border-slate-700">

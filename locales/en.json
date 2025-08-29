@@ -2,7 +2,8 @@
 {
   "header": {
     "title": "Audio Factory",
-    "subtitle": "Automated SRT Subtitle Generator"
+    "subtitle": "Automated SRT Subtitle Generator",
+    "changeApiKey": "Change API Key"
   },
   "tabs": {
     "generator": "Generator",
