@@ -1,53 +1,49 @@
 
 import React, { useState } from 'react';
 import { KeyIcon } from './icons/KeyIcon';
+import { useTranslation } from '../hooks/useTranslation';
 
 interface ApiKeyInputProps {
-  onApiKeySubmit: (apiKey: string) => void;
+  onSubmit: (apiKey: string) => void;
 }
 
-export const ApiKeyInput: React.FC<ApiKeyInputProps> = ({ onApiKeySubmit }) => {
+export const ApiKeyInput: React.FC<ApiKeyInputProps> = ({ onSubmit }) => {
   const [apiKey, setApiKey] = useState('');
+  const { t } = useTranslation();
 
-  const handleSubmit = (event: React.FormEvent) => {
-    event.preventDefault();
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
     if (apiKey.trim()) {
-      onApiKeySubmit(apiKey.trim());
+      onSubmit(apiKey.trim());
     }
   };
 
   return (
-    <div className="flex flex-col items-center text-center animate-fade-in">
-      <KeyIcon className="w-16 h-16 text-cyan-400" />
-      <h2 className="mt-4 text-2xl font-bold text-cyan-300 tracking-wide">Factory Authorization Required</h2>
-      <p className="mt-2 text-gray-400 max-w-md">
-        To power the machinery, please provide your Google Gemini API key. Your key is stored locally in your browser and is never sent to our servers.
+    <div className="flex flex-col items-center justify-center text-center p-8 animate-fade-in">
+      <KeyIcon className="w-16 h-16 text-sky-500 dark:text-sky-400 mb-4" />
+      <h2 className="text-2xl font-bold text-sky-700 dark:text-sky-300 tracking-wider">{t('apiKey.title')}</h2>
+      <p className="mt-2 text-slate-500 dark:text-slate-400 max-w-md">
+        {t('apiKey.description')}
       </p>
-
-      <form onSubmit={handleSubmit} className="w-full max-w-sm mt-8">
-        <div className="flex flex-col items-center">
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder="Enter your Gemini API key"
-            className="w-full px-4 py-3 bg-gray-900/70 border border-gray-600 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-cyan-500 transition-colors"
-            required
-            aria-label="Gemini API Key"
-          />
-          <button
-            type="submit"
-            className="mt-4 w-full inline-flex items-center justify-center px-8 py-3 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-lg transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-cyan-400/50 shadow-lg shadow-cyan-600/30"
-          >
-            Authorize and Start
-          </button>
-        </div>
+      <form onSubmit={handleSubmit} className="mt-6 w-full max-w-sm">
+        <input
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={t('apiKey.placeholder')}
+          className="w-full px-4 py-3 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-800 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-sky-500"
+          aria-label={t('apiKey.ariaLabel')}
+        />
+        <button
+          type="submit"
+          disabled={!apiKey.trim()}
+          className="mt-4 w-full inline-flex items-center justify-center px-6 py-3 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-lg transition-all duration-300 disabled:bg-slate-400 dark:disabled:bg-slate-600 disabled:cursor-not-allowed transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-sky-400/50"
+        >
+          {t('apiKey.button')}
+        </button>
       </form>
-      <p className="mt-6 text-xs text-gray-500">
-        Don't have a key? Get one for free at{' '}
-        <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-cyan-500 hover:underline">
-          Google AI Studio
-        </a>.
+       <p className="mt-4 text-xs text-slate-500 dark:text-slate-400">
+        {t('apiKey.helpText')}
       </p>
     </div>
   );

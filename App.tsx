@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useContext } from 'react';
 import { generateSrtFromAudioAndScript } from './services/geminiService';
 import { FileUpload } from './components/FileUpload';
 import { ScriptUpload } from './components/ScriptUpload';
@@ -9,39 +9,66 @@ import { Header } from './components/Header';
 import { RobotIcon } from './components/icons/RobotIcon';
 import { ErrorDisplay } from './components/ErrorDisplay';
 import { ApiKeyInput } from './components/ApiKeyInput';
+import { AppContext } from './contexts/AppContext';
+import { useTranslation } from './hooks/useTranslation';
+import { HistoryPanel } from './components/HistoryPanel';
+import { CogIcon } from './components/icons/CogIcon';
+import { HistoryIcon } from './components/icons/HistoryIcon';
+
 
 type AppStatus = 'idle' | 'loading' | 'success' | 'error';
+type AppView = 'generator' | 'history';
 
 const App: React.FC = () => {
-  const [apiKey, setApiKey] = useState<string>('');
-  const [isApiKeySet, setIsApiKeySet] = useState<boolean>(false);
+  const { theme, addToHistory } = useContext(AppContext);
+  const { t } = useTranslation();
+
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [isAuthorized, setIsAuthorized] = useState<boolean>(false);
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [textFile, setTextFile] = useState<File | null>(null);
   const [scriptContent, setScriptContent] = useState<string>('');
   const [srtResult, setSrtResult] = useState<string>('');
   const [status, setStatus] = useState<AppStatus>('idle');
   const [error, setError] = useState<string | null>(null);
+  const [maxCharsPerLine, setMaxCharsPerLine] = useState<number>(100);
+  const [generationLanguage, setGenerationLanguage] = useState<'en' | 'vi'>('en');
+  const [view, setView] = useState<AppView>('generator');
+  const [viewingHistoryItem, setViewingHistoryItem] = useState<{ fileName: string; srtContent: string } | null>(null);
+
 
   useEffect(() => {
-    const storedKey = localStorage.getItem('gemini_api_key');
-    if (storedKey) {
-      setApiKey(storedKey);
-      setIsApiKeySet(true);
+    const storedApiKey = localStorage.getItem('gemini-api-key');
+    if (storedApiKey) {
+      setApiKey(storedApiKey);
+      setIsAuthorized(true);
     }
   }, []);
+  
+   useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [theme]);
 
   const handleApiKeySubmit = (key: string) => {
-    if (key.trim()) {
-      setApiKey(key);
-      setIsApiKeySet(true);
-      localStorage.setItem('gemini_api_key', key);
-    }
+    setApiKey(key);
+    localStorage.setItem('gemini-api-key', key);
+    setIsAuthorized(true);
+  };
+  
+  const handleInvalidApiKey = () => {
+      localStorage.removeItem('gemini-api-key');
+      setApiKey(null);
+      setIsAuthorized(false);
+      setStatus('idle');
   };
 
   const handleAudioFileChange = (file: File | null) => {
     if (file) {
       setAudioFile(file);
-      // Reset subsequent steps if audio file changes
       setTextFile(null);
       setScriptContent('');
       setSrtResult('');
@@ -62,13 +89,13 @@ const App: React.FC = () => {
             setSrtResult('');
             setError(null);
         } else {
-            setError('The script file appears to be empty.');
+            setError(t('error.emptyScript'));
             setStatus('error');
             setTextFile(null);
         }
       };
       reader.onerror = () => {
-        setError('Failed to read the script file.');
+        setError(t('error.readScript'));
         setStatus('error');
         setTextFile(null);
       }
@@ -77,38 +104,56 @@ const App: React.FC = () => {
   };
 
   const handleGenerateSrt = useCallback(async () => {
+    if (!apiKey) {
+      setError(t('error.apiKeyMissing'));
+      handleInvalidApiKey();
+      return;
+    }
     if (!audioFile) {
-      setError('Please select an audio file first.');
+      setError(t('error.noAudio'));
       setStatus('error');
       return;
     }
     if (!scriptContent || !textFile) {
-      setError('Please provide the script file.');
+      setError(t('error.noScript'));
       setStatus('error');
       return;
     }
     setStatus('loading');
     setError(null);
+    setViewingHistoryItem(null);
     try {
-      const result = await generateSrtFromAudioAndScript(audioFile, scriptContent, apiKey);
+      const result = await generateSrtFromAudioAndScript(audioFile, scriptContent, maxCharsPerLine, apiKey, generationLanguage);
       setSrtResult(result);
       setStatus('success');
+      addToHistory({
+        id: crypto.randomUUID(),
+        fileName: audioFile.name,
+        srtContent: result,
+        timestamp: Date.now(),
+      });
     } catch (err: unknown) {
       console.error('SRT Generation failed:', err);
-      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred during SRT generation.';
-      setError(`Production halt! ${errorMessage}`);
-      setStatus('error');
+      const errorMessage = err instanceof Error ? err.message : t('error.unknown');
+      
+      if (errorMessage.includes('Invalid API Key')) {
+          setError(`${errorMessage}. ${t('error.newKeyPrompt')}`);
+          setStatus('error');
+          setTimeout(handleInvalidApiKey, 3000);
+      } else {
+          setError(`${t('error.productionHalt')} ${errorMessage}`);
+          setStatus('error');
+      }
     }
-  }, [audioFile, textFile, scriptContent, apiKey]);
+  }, [audioFile, textFile, scriptContent, maxCharsPerLine, apiKey, generationLanguage, t, addToHistory]);
 
-  const handleDownloadSrt = () => {
-    if (!srtResult) return;
-    const blob = new Blob([srtResult], { type: 'text/srt' });
+  const handleDownloadSrt = (fileName: string, srtContent: string) => {
+    const blob = new Blob([srtContent], { type: 'text/srt' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    const fileName = audioFile?.name.replace(/\.[^/.]+$/, "") || 'subtitles';
-    a.download = `${fileName}.srt`;
+    const baseName = fileName.replace(/\.[^/.]+$/, "") || 'subtitles';
+    a.download = `${baseName}.srt`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -122,37 +167,46 @@ const App: React.FC = () => {
     setSrtResult('');
     setStatus('idle');
     setError(null);
+    setViewingHistoryItem(null);
+    setView('generator');
   }
 
-  const handleChangeApiKey = () => {
-    setApiKey('');
-    setIsApiKeySet(false);
-    localStorage.removeItem('gemini_api_key');
-    resetState();
+  const handleViewHistoryItem = (item: { fileName: string; srtContent: string }) => {
+    setViewingHistoryItem(item);
+    setStatus('success');
+    setView('generator');
   };
 
   const renderContent = () => {
-    if (!isApiKeySet) {
-      return <ApiKeyInput onApiKeySubmit={handleApiKeySubmit} />;
+    if (!isAuthorized) {
+        return <ApiKeyInput onSubmit={handleApiKeySubmit} />;
     }
+      
+    if (view === 'history') {
+      return <HistoryPanel onViewItem={handleViewHistoryItem} />;
+    }
+
     switch (status) {
       case 'loading':
         return <Loader />;
       case 'error':
-        return <ErrorDisplay message={error || 'An unknown error occurred.'} onReset={resetState} />;
+        const showReset = !error?.includes('Invalid API Key');
+        return <ErrorDisplay message={error || t('error.unknown')} onReset={resetState} showReset={showReset} />;
       case 'success':
+        const currentFile = viewingHistoryItem?.fileName || audioFile?.name || 'your_audio.mp3';
+        const currentSrt = viewingHistoryItem?.srtContent || srtResult;
         return (
           <TranscriptDisplay
-            srtContent={srtResult}
-            onDownload={handleDownloadSrt}
+            srtContent={currentSrt}
+            onDownload={() => handleDownloadSrt(currentFile, currentSrt)}
             onReset={resetState}
-            fileName={audioFile?.name || 'your_audio.mp3'}
+            fileName={currentFile}
           />
         );
       case 'idle':
       default:
         return (
-          <div className="space-y-10">
+          <div className="space-y-8">
             <FileUpload onFileChange={handleAudioFileChange} selectedFile={audioFile} />
             
             {audioFile && (
@@ -160,14 +214,45 @@ const App: React.FC = () => {
             )}
 
             {audioFile && textFile && scriptContent && (
-              <div className="text-center pt-4">
-                <button
-                  onClick={handleGenerateSrt}
-                  className="w-full sm:w-auto inline-flex items-center justify-center px-8 py-3 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-lg transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-cyan-400/50 shadow-lg shadow-cyan-600/30"
-                >
-                  <RobotIcon className="w-6 h-6 mr-3"/>
-                  Start Production (Generate SRT)
-                </button>
+               <div className="animate-fade-in">
+                <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-700 space-y-6">
+                  <div>
+                    <label className="block text-center text-sky-600 dark:text-sky-400 font-semibold mb-2">
+                        {t('settings.generationLanguage')}
+                    </label>
+                    <div className="flex justify-center gap-2">
+                        <button onClick={() => setGenerationLanguage('en')} className={`px-4 py-2 rounded-md font-semibold transition-colors ${generationLanguage === 'en' ? 'bg-sky-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-600'}`}>English</button>
+                        <button onClick={() => setGenerationLanguage('vi')} className={`px-4 py-2 rounded-md font-semibold transition-colors ${generationLanguage === 'vi' ? 'bg-sky-600 text-white' : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-600'}`}>Tiếng Việt</button>
+                    </div>
+                  </div>
+                  <div>
+                    <label htmlFor="char-limit-slider" className="block text-center text-sky-600 dark:text-sky-400 font-semibold">
+                        {t('settings.maxChars')}: <span className="font-bold text-slate-800 dark:text-white tabular-nums">{maxCharsPerLine}</span>
+                    </label>
+                    <input
+                        id="char-limit-slider"
+                        type="range"
+                        min="70"
+                        max="150"
+                        step="1"
+                        value={maxCharsPerLine}
+                        onChange={(e) => setMaxCharsPerLine(Number(e.target.value))}
+                        className="w-full h-2 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-sky-500"
+                        aria-label={t('settings.maxCharsAria')}
+                    />
+                    <p className="text-xs text-slate-500 dark:text-slate-400 text-center mt-1">{t('settings.maxCharsDescription')}</p>
+                  </div>
+                </div>
+
+                <div className="text-center pt-8">
+                  <button
+                    onClick={handleGenerateSrt}
+                    className="w-full sm:w-auto inline-flex items-center justify-center px-8 py-3 bg-sky-600 hover:bg-sky-500 text-white font-bold rounded-lg transition-all duration-300 transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-sky-400/50 shadow-lg shadow-sky-600/30"
+                  >
+                    <RobotIcon className="w-6 h-6 mr-3"/>
+                    {t('buttons.startProduction')}
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -176,21 +261,30 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="bg-gray-900 min-h-screen text-gray-200 font-sans flex flex-col items-center p-4 sm:p-6 md:p-8">
+    <div className="bg-slate-50 dark:bg-slate-900 min-h-screen text-slate-800 dark:text-slate-200 font-sans flex flex-col items-center p-4 sm:p-6 md:p-8 transition-colors duration-300">
       <div className="w-full max-w-3xl mx-auto">
         <Header />
-        <main className="mt-8 bg-gray-800/50 backdrop-blur-sm border border-cyan-500/20 rounded-2xl shadow-2xl shadow-cyan-500/10 overflow-hidden">
+        <main className="mt-8 bg-white dark:bg-slate-800/50 backdrop-blur-sm border border-slate-200 dark:border-sky-500/20 rounded-2xl shadow-2xl shadow-sky-500/10 overflow-hidden">
+            {isAuthorized && (
+               <div className="border-b border-slate-200 dark:border-slate-700">
+                  <nav className="flex justify-center -mb-px">
+                      <button onClick={() => setView('generator')} className={`px-4 py-3 font-semibold text-sm border-b-2 transition-colors ${view === 'generator' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:hover:text-slate-300 dark:hover:border-slate-500'}`}>
+                          <CogIcon className="w-5 h-5 mr-2 inline-block" />
+                          {t('tabs.generator')}
+                      </button>
+                      <button onClick={() => setView('history')} className={`px-4 py-3 font-semibold text-sm border-b-2 transition-colors ${view === 'history' ? 'border-sky-500 text-sky-600 dark:text-sky-400' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:hover:text-slate-300 dark:hover:border-slate-500'}`}>
+                          <HistoryIcon className="w-5 h-5 mr-2 inline-block" />
+                          {t('tabs.history')}
+                      </button>
+                  </nav>
+               </div>
+            )}
           <div className="p-6 sm:p-8 md:p-10">
              {renderContent()}
           </div>
         </main>
-        <footer className="text-center mt-8 text-gray-500 text-sm">
-          <p>&copy; {new Date().getFullYear()} Audio Factory Inc. All rights reserved.</p>
-          {isApiKeySet && (
-            <button onClick={handleChangeApiKey} className="mt-2 text-cyan-500 hover:text-cyan-400 underline text-xs">
-              Change API Key
-            </button>
-          )}
+        <footer className="text-center mt-8 text-slate-500 dark:text-slate-400 text-sm">
+          <p>&copy; {new Date().getFullYear()} {t('footer.text')}</p>
         </footer>
       </div>
     </div>
